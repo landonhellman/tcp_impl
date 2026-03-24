@@ -273,7 +273,10 @@ public class Node {
                Integer.parseInt(args[6]) :
                TransferClient.DEFAULT_BUFFER_SZ;
 
+//            System.out.println("this is why");
+
             TCPSock sock = this.tcpMan.socket();
+//            System.out.println(1);
             sock.bind(localPort);
             sock.connect(destAddr, port);
             TransferClient client = new
@@ -283,6 +286,7 @@ public class Node {
             return true;
         } catch (Exception e) {
             logError("Exception: " + e);
+//            System.out.println("2");
         }
 
         return false;
@@ -309,6 +313,7 @@ public class Node {
 
         try {
             int port = Integer.parseInt(args[1]);
+//            System.out.println(port);
             int backlog = Integer.parseInt(args[2]);
             long servint =
                 args.length >= 4 ?
@@ -322,7 +327,10 @@ public class Node {
                 args.length == 6 ?
                 Integer.parseInt(args[5]) :
                 TransferServer.DEFAULT_BUFFER_SZ;
+
+//            System.out.println("this is why");
             TCPSock sock = this.tcpMan.socket();
+//            System.out.println("HHH");
             sock.bind(port);
             sock.listen(backlog);
 
@@ -333,6 +341,7 @@ public class Node {
 
             return true;
         } catch (Exception e) {
+//            System.out.println("AH");
             logError("Exception: " + e);
         }
 

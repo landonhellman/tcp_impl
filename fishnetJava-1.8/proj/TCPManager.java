@@ -1,3 +1,5 @@
+import java.util.HashMap;
+
 /**
  * <p>Title: CPSC 433/533 Programming Assignment</p>
  *
@@ -16,6 +18,10 @@ public class TCPManager {
     private Manager manager;
 
     private static final byte dummy[] = new byte[0];
+
+    HashMap<Integer, TCPSock> boundPorts = new HashMap<>();
+    HashMap<Integer, TCPSock> listeners = new HashMap<>();
+    HashMap<Integer, TCPSock> connections = new HashMap<>();
 
     public TCPManager(Node node, int addr, Manager manager) {
         this.node = node;
@@ -41,7 +47,27 @@ public class TCPManager {
      *                 a local port
      */
     public TCPSock socket() {
-        return null;
+        return new TCPSock(this);
+    }
+
+    public boolean bindPort(int sourcePort, TCPSock sock) {
+        if (boundPorts.containsKey(sourcePort)) {
+            return false;
+        }
+        boundPorts.put(sourcePort, sock);
+        return true;
+    }
+
+    public void createListener(int sourcePort, TCPSock sock) {
+        listeners.put(sourcePort, sock);
+    }
+
+    public void sendSYN(TCPSock sock) {
+
+    }
+
+    public int getAddr() {
+        return this.addr;
     }
 
     /*

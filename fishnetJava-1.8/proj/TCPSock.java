@@ -23,8 +23,23 @@ public class TCPSock {
     }
     private State state;
 
-    public TCPSock() {
+    private int sourceFishnetAddress;
+    private int destinationFishnetAddress;
+    private int sourcePort;
+    private int destinationPort;
+    private TCPSockID id;
+    private TCPManager manager;
+
+    private int backlog;
+
+    public TCPSock(TCPManager manager) {
+        this.manager = manager;
     }
+
+//    public TCPSock(int sourceFishnetAddress, int destinationFishnetAddress,
+//                   int sourcePort, int destinationPort) {
+//        this.id = new TCPSockID(sourceFishnetAddress, destinationFishnetAddress, sourcePort, destinationPort);
+//    }
 
     /*
      * The following are the socket APIs of TCP transport service.
@@ -37,8 +52,21 @@ public class TCPSock {
      * @param localPort int local port number to bind the socket to
      * @return int 0 on success, -1 otherwise
      */
-    public int bind(int localPort) {
-        return -1;
+    public int bind(int sourcePort) {
+
+//        System.out.println("BOUND");
+        if (!isClosed()) {
+            return -1;
+        }
+
+        if (!manager.bindPort(sourcePort, this)) {
+            return -1;
+        }
+
+        this.sourcePort = sourcePort;
+        this.sourceFishnetAddress = manager.getAddr();
+        return 0;
+
     }
 
     /**
@@ -47,7 +75,16 @@ public class TCPSock {
      * @return int 0 on success, -1 otherwise
      */
     public int listen(int backlog) {
-        return -1;
+        if (!isClosed() || this.sourcePort == 0) {
+            return -1;
+        }
+
+        this.backlog = backlog;
+        this.state = State.LISTEN;
+        this.manager.createListener(this.sourcePort, this);
+
+        return 0;
+
     }
 
     /**
@@ -83,7 +120,20 @@ public class TCPSock {
      * @return int 0 on success, -1 otherwise
      */
     public int connect(int destAddr, int destPort) {
-        return -1;
+        if (!isClosed()) {
+            return -1;
+        }
+
+        this.destinationFishnetAddress = destAddr;
+        this.destinationPort = destPort;
+
+        this.id = new TCPSockID(sourceFishnetAddress, destAddr, sourcePort, destPort);
+
+        manager.sendSYN(this);
+
+        this.state = State.SYN_SENT;
+
+        return 0;
     }
 
     /**
@@ -96,6 +146,7 @@ public class TCPSock {
      * Release a connection immediately (abortive shutdown)
      */
     public void release() {
+        this.state = State.CLOSED;
     }
 
     /**
