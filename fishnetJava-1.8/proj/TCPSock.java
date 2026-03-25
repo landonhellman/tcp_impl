@@ -10,6 +10,8 @@
  * @author Hao Wang
  * @version 1.0
  */
+import java.util.Queue;
+import java.util.LinkedList;
 
 public class TCPSock {
     // TCP socket states
@@ -21,25 +23,38 @@ public class TCPSock {
         ESTABLISHED,
         SHUTDOWN // close requested, FIN not sent (due to unsent data in queue)
     }
+    private final long AckTimeout = 10000;
     private State state;
 
-    private int sourceFishnetAddress;
-    private int destinationFishnetAddress;
-    private int sourcePort;
-    private int destinationPort;
-    private TCPSockID id;
+    public int sourceFishnetAddress;
+    public int destinationFishnetAddress;
+    public int sourcePort;
+    public int destinationPort;
+    public TCPSockID id;
     private TCPManager manager;
 
+
+    // for retransmission
+    public boolean waitingForAck = false;
+    byte[] outstandingData;
+    int outstandingSeqNum;
+    int outstandingLen;
+    public long timeoutTime;
+
+    // QUESTION: can we just use the Java.util queue?
+    Queue<TCPSock> pendingConnections = new LinkedList<>();
+
     private int backlog;
+    public int expectedSeqNum;
+
+    public int nextSeqNum = 1;
+
+    LinkedList<Byte> buffer = new LinkedList<>();
 
     public TCPSock(TCPManager manager) {
         this.manager = manager;
+        this.state = State.CLOSED;
     }
-
-//    public TCPSock(int sourceFishnetAddress, int destinationFishnetAddress,
-//                   int sourcePort, int destinationPort) {
-//        this.id = new TCPSockID(sourceFishnetAddress, destinationFishnetAddress, sourcePort, destinationPort);
-//    }
 
     /*
      * The following are the socket APIs of TCP transport service.
@@ -53,8 +68,6 @@ public class TCPSock {
      * @return int 0 on success, -1 otherwise
      */
     public int bind(int sourcePort) {
-
-//        System.out.println("BOUND");
         if (!isClosed()) {
             return -1;
         }
@@ -87,12 +100,21 @@ public class TCPSock {
 
     }
 
+    public void queueSock(TCPSock sock) {
+        if (pendingConnections.size() < backlog) {
+            pendingConnections.add(sock);
+        }
+    }
+
     /**
      * Accept a connection on a socket
      *
      * @return TCPSock The first established connection on the request queue
      */
     public TCPSock accept() {
+        if (!pendingConnections.isEmpty()) {
+            return pendingConnections.poll();
+        }
         return null;
     }
 
@@ -112,6 +134,10 @@ public class TCPSock {
         return (state == State.SHUTDOWN);
     }
 
+    public void setEstablished() {
+        state = State.ESTABLISHED;
+    }
+
     /**
      * Initiate connection to a remote socket
      *
@@ -129,17 +155,101 @@ public class TCPSock {
 
         this.id = new TCPSockID(sourceFishnetAddress, destAddr, sourcePort, destPort);
 
-        manager.sendSYN(this);
-
         this.state = State.SYN_SENT;
+        manager.connections.put(this.id, this);
+        sendSYN();
 
         return 0;
+    }
+
+    public void sendSYN() {
+        Transport aPacket = new Transport(
+                this.sourcePort,
+                this.destinationPort,
+                Transport.SYN,
+                0,
+                0,
+                new byte[0]
+        );
+
+        manager.node.sendSegment(this.sourceFishnetAddress, this.destinationFishnetAddress,
+                Protocol.TRANSPORT_PKT, aPacket.pack());
+
+        this.waitingForAck = true;
+
+        System.out.print("S");
+    }
+
+    public void sendACK() {
+        Transport aPacket = new Transport(
+                this.sourcePort,
+                this.destinationPort,
+                Transport.ACK,
+                0,
+                this.expectedSeqNum,
+                new byte[0]
+        );
+
+        manager.node.sendSegment(this.sourceFishnetAddress, this.destinationFishnetAddress,
+                Protocol.TRANSPORT_PKT, aPacket.pack());
+    }
+
+    public void sendDATA(byte[] data, int pos, int len) {
+        byte[] payload = new byte[len];
+        System.arraycopy(data, pos, payload, 0, len);
+
+        Transport pkt = new Transport(
+                this.sourcePort,
+                this.destinationPort,
+                Transport.DATA,
+                0,
+                this.nextSeqNum,
+                payload
+        );
+
+        manager.node.sendSegment(this.sourceFishnetAddress, this.destinationFishnetAddress,
+                Protocol.TRANSPORT_PKT, pkt.pack()
+        );
+
+        this.waitingForAck = true;
+
+        this.outstandingData = new byte[len];
+        System.arraycopy(payload, 0, this.outstandingData, 0, len);
+        this.outstandingSeqNum = this.nextSeqNum;
+        this.outstandingLen = len;
+
+        long now = manager.manager.now();
+        this.timeoutTime = now + AckTimeout;
+
+        System.out.print(".");
+    }
+
+    public void sendFIN() {
+        Transport aPacket = new Transport(
+                this.sourcePort,
+                this.destinationPort,
+                Transport.FIN,
+                0,
+                this.nextSeqNum,
+                new byte[0]
+        );
+
+        manager.node.sendSegment(this.sourceFishnetAddress, this.destinationFishnetAddress,
+                Protocol.TRANSPORT_PKT, aPacket.pack());
+
+        this.waitingForAck = true;
+
+        System.out.print("F");
     }
 
     /**
      * Initiate closure of a connection (graceful shutdown)
      */
     public void close() {
+        if (isConnected()) {
+            state = State.CLOSED;
+            sendFIN();
+        }
     }
 
     /**
@@ -147,6 +257,7 @@ public class TCPSock {
      */
     public void release() {
         this.state = State.CLOSED;
+        sendFIN();
     }
 
     /**
@@ -160,7 +271,17 @@ public class TCPSock {
      *             than len; on failure, -1
      */
     public int write(byte[] buf, int pos, int len) {
-        return -1;
+        if (!isConnected()) {
+            return -1;
+        }
+
+        if (len <= 0 || this.waitingForAck) {
+            return 0;
+        }
+
+        sendDATA(buf, pos, Math.min(len, Transport.MAX_PAYLOAD_SIZE));
+        nextSeqNum += Math.min(len, Transport.MAX_PAYLOAD_SIZE);
+        return Math.min(len, Transport.MAX_PAYLOAD_SIZE);
     }
 
     /**
@@ -174,7 +295,108 @@ public class TCPSock {
      *             than len; on failure, -1
      */
     public int read(byte[] buf, int pos, int len) {
-        return -1;
+        if (buffer.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+
+        while (count < len && !buffer.isEmpty()) {
+            buf[pos + count] = buffer.removeFirst();
+            count++;
+        }
+
+        return count;
+    }
+
+    public void handleSYN(Packet p) {
+        Transport t = Transport.unpack(p.getPayload());
+
+        TCPSock listener = manager.listeners.get(t.getDestPort());
+
+        if (listener == null) {
+            return;
+        }
+
+        TCPSock sock = manager.socket();
+        sock.sourcePort = t.getDestPort();
+        sock.destinationPort = t.getSrcPort();
+        sock.sourceFishnetAddress = manager.getAddr();
+        sock.destinationFishnetAddress = p.getSrc();
+
+        sock.id = new TCPSockID(
+                sock.sourceFishnetAddress,
+                sock.destinationFishnetAddress,
+                sock.sourcePort,
+                sock.destinationPort
+        );
+
+        sock.expectedSeqNum = t.getSeqNum() + 1;
+
+        listener.queueSock(sock);
+
+        manager.connections.put(sock.id, sock);
+        sock.setEstablished();
+
+        sock.sendACK();
+    }
+
+    public void handleACK(Packet p) {
+        Transport t = Transport.unpack(p.getPayload());
+
+        TCPSockID id = new TCPSockID(
+                p.getDest(),
+                p.getSrc(),
+                t.getDestPort(),
+                t.getSrcPort()
+        );
+
+        if (this.isConnectionPending()) {
+            this.setEstablished();
+            this.waitingForAck = false;
+            System.out.print(":");
+            return;
+        }
+
+        if (this.isClosurePending()) {
+            this.waitingForAck = false;
+            this.state = State.CLOSED;
+            manager.connections.remove(id);
+            System.out.print(":");
+            return;
+        }
+
+        if (this.waitingForAck && (t.getSeqNum() == this.outstandingSeqNum + this.outstandingLen)) {
+            this.waitingForAck = false;
+            this.outstandingData = null;
+            this.outstandingLen = 0;
+            System.out.print(":");
+        } else {
+            System.out.print("?");
+        }
+    }
+
+    public void handleDATA(Packet p) {
+        Transport t = Transport.unpack(p.getPayload());
+
+        byte[] data = t.getPayload();
+
+        if (t.getSeqNum() == this.expectedSeqNum) {
+            for (byte b : data) {
+                this.buffer.add(b);
+            }
+            this.expectedSeqNum += data.length;
+            System.out.print(".");
+        } else {
+            System.out.print("!");
+        }
+
+        this.sendACK();
+    }
+
+    public void handleFIN(Packet p) {
+        this.sendACK();
+        this.state = State.SHUTDOWN;
+        manager.connections.remove(id);
     }
 
     /*

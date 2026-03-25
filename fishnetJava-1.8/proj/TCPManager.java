@@ -13,15 +13,17 @@ import java.util.HashMap;
  * @version 1.0
  */
 public class TCPManager {
-    private Node node;
+    public Node node;
     private int addr;
-    private Manager manager;
+    public Manager manager;
 
     private static final byte dummy[] = new byte[0];
 
     HashMap<Integer, TCPSock> boundPorts = new HashMap<>();
     HashMap<Integer, TCPSock> listeners = new HashMap<>();
-    HashMap<Integer, TCPSock> connections = new HashMap<>();
+    HashMap<TCPSockID, TCPSock> connections = new HashMap<>();
+
+    private final long AckTimeout = 10000;
 
     public TCPManager(Node node, int addr, Manager manager) {
         this.node = node;
@@ -33,8 +35,41 @@ public class TCPManager {
      * Start this TCP manager
      */
     public void start() {
-
+//        start_timer();
     }
+
+//    public void start_timer() {
+//        this.node.addTimer(AckTimeout, "tcpTimedOut");
+//    }
+
+//    public void check_retransmission() {
+//        long now = manager.now();
+//
+//        for (TCPSock sock : this.connections.values()) {
+//            if (sock.waitingForAck && now >= sock.timeoutTime) {
+//
+//                Transport pkt = new Transport(
+//                        sock.sourcePort,
+//                        sock.destinationPort,
+//                        Transport.DATA,
+//                        0,
+//                        sock.outstandingSeqNum,
+//                        sock.outstandingData
+//                );
+//
+//                node.sendSegment(
+//                        sock.sourceFishnetAddress,
+//                        sock.destinationFishnetAddress,
+//                        Protocol.TRANSPORT_PKT,
+//                        pkt.pack()
+//                );
+//
+//                System.out.print("!");
+//
+//                sock.timeoutTime = now + AckTimeout;
+//            }
+//        }
+//    }
 
     /*
      * Begin socket API
@@ -62,8 +97,50 @@ public class TCPManager {
         listeners.put(sourcePort, sock);
     }
 
-    public void sendSYN(TCPSock sock) {
+    public void receiveTransport(Packet p) {
+        Transport t = Transport.unpack(p.getPayload());
 
+        if (t == null) {
+            return;
+        }
+
+        TCPSockID id = new TCPSockID(
+                p.getDest(),
+                p.getSrc(),
+                t.getDestPort(),
+                t.getSrcPort()
+        );
+
+        TCPSock sock = connections.get(id);
+
+        switch(t.getType()) {
+            case Transport.SYN:
+                TCPSock listener = listeners.get(t.getDestPort());
+                if (listener != null) {
+                    listener.handleSYN(p);
+                }
+                break;
+            case Transport.ACK:
+                if (sock == null) {
+                    System.out.print("?");
+                    return;
+                }
+                sock.handleACK(p);
+                break;
+            case Transport.DATA:
+                if (sock == null) {
+                    System.out.print("!");
+                    return;
+                }
+                sock.handleDATA(p);
+                break;
+            case Transport.FIN:
+                if (sock == null) {
+                    return;
+                }
+                sock.handleFIN(p);
+                break;
+        }
     }
 
     public int getAddr() {

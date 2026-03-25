@@ -118,6 +118,14 @@ public class Node {
 	this.addTimer(PingTimeout, "pingTimedOut");
     }
 
+    /**
+     * Callback method given to manager to invoke when a timer fires.
+     */
+//    public void tcpTimedOut() {
+//        this.tcpMan.check_retransmission();
+//        this.tcpMan.start_timer();
+//    }
+
     private boolean matchPingCommand(String command) {
 	int index = command.indexOf(" ");
 	if(index == -1) {
@@ -149,6 +157,10 @@ public class Node {
 	case Protocol.PING_REPLY_PKT:
 	    this.receivePingReply(packet);
 	    break;
+
+    case Protocol.TRANSPORT_PKT:
+        this.tcpMan.receiveTransport(packet);
+        break;
 
 	default:
 	    logError("Packet with unknown protocol received. Protocol: " + packet.getProtocol());
@@ -196,7 +208,7 @@ public class Node {
     }
 
     // Adds a timer, to fire in deltaT milliseconds, with a callback to a public function of this class that takes no parameters
-    private void addTimer(long deltaT, String methodName) {
+    public void addTimer(long deltaT, String methodName) {
 	try {
 	    Method method = Callback.getMethod(methodName, this, null);
 	    Callback cb = new Callback(method, this, null);
