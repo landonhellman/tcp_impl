@@ -67,7 +67,7 @@ public class Node {
      */
     public void onReceive(Integer from, byte[] msg) {
 	Packet packet = Packet.unpack(msg);
-	//logOutput("received packet from " + from);
+//	logOutput("received packet from " + from);
 	if(packet == null) {
 	    logError("Unable to unpack message: " + Utility.byteArrayToString(msg) + " Received from " + from);
 	    return;
@@ -121,10 +121,10 @@ public class Node {
     /**
      * Callback method given to manager to invoke when a timer fires.
      */
-//    public void tcpTimedOut() {
-//        this.tcpMan.check_retransmission();
-//        this.tcpMan.start_timer();
-//    }
+    public void tcpTimedOut() {
+        this.tcpMan.check_retransmission();
+        this.tcpMan.start_timer();
+    }
 
     private boolean matchPingCommand(String command) {
 	int index = command.indexOf(" ");

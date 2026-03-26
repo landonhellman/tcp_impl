@@ -23,7 +23,7 @@ public class TCPManager {
     HashMap<Integer, TCPSock> listeners = new HashMap<>();
     HashMap<TCPSockID, TCPSock> connections = new HashMap<>();
 
-    private final long AckTimeout = 10000;
+    private final long AckTimeout = 500;
 
     public TCPManager(Node node, int addr, Manager manager) {
         this.node = node;
@@ -35,41 +35,41 @@ public class TCPManager {
      * Start this TCP manager
      */
     public void start() {
-//        start_timer();
+        start_timer();
     }
 
-//    public void start_timer() {
-//        this.node.addTimer(AckTimeout, "tcpTimedOut");
-//    }
+    public void start_timer() {
+        this.node.addTimer(AckTimeout, "tcpTimedOut");
+    }
 
-//    public void check_retransmission() {
-//        long now = manager.now();
-//
-//        for (TCPSock sock : this.connections.values()) {
-//            if (sock.waitingForAck && now >= sock.timeoutTime) {
-//
-//                Transport pkt = new Transport(
-//                        sock.sourcePort,
-//                        sock.destinationPort,
-//                        Transport.DATA,
-//                        0,
-//                        sock.outstandingSeqNum,
-//                        sock.outstandingData
-//                );
-//
-//                node.sendSegment(
-//                        sock.sourceFishnetAddress,
-//                        sock.destinationFishnetAddress,
-//                        Protocol.TRANSPORT_PKT,
-//                        pkt.pack()
-//                );
-//
-//                System.out.print("!");
-//
-//                sock.timeoutTime = now + AckTimeout;
-//            }
-//        }
-//    }
+    public void check_retransmission() {
+        long now = manager.now();
+
+        for (TCPSock sock : this.connections.values()) {
+            if (sock.waitingForAck && now >= sock.timeoutTime) {
+
+                Transport pkt = new Transport(
+                        sock.sourcePort,
+                        sock.destinationPort,
+                        sock.transType,
+                        0,
+                        sock.transSeqNum,
+                        sock.transData
+                );
+
+                node.sendSegment(
+                        sock.sourceFishnetAddress,
+                        sock.destinationFishnetAddress,
+                        Protocol.TRANSPORT_PKT,
+                        pkt.pack()
+                );
+
+                System.out.print("!");
+
+                sock.timeoutTime = now + AckTimeout;
+            }
+        }
+    }
 
     /*
      * Begin socket API

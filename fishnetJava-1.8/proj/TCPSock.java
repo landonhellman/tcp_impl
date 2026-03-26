@@ -23,7 +23,7 @@ public class TCPSock {
         ESTABLISHED,
         SHUTDOWN // close requested, FIN not sent (due to unsent data in queue)
     }
-    private final long AckTimeout = 10000;
+    private final long AckTimeout = 500;
     private State state;
 
     public int sourceFishnetAddress;
@@ -36,9 +36,10 @@ public class TCPSock {
 
     // for retransmission
     public boolean waitingForAck = false;
-    byte[] outstandingData;
-    int outstandingSeqNum;
-    int outstandingLen;
+    int transType;
+    byte[] transData;
+    int transSeqNum;
+    int transLen;
     public long timeoutTime;
 
     // QUESTION: can we just use the Java.util queue?
@@ -176,6 +177,11 @@ public class TCPSock {
                 Protocol.TRANSPORT_PKT, aPacket.pack());
 
         this.waitingForAck = true;
+        this.transType = Transport.SYN;
+        this.transSeqNum = 0;
+        this.transLen = 0;
+        this.transData = new byte[0];
+        this.timeoutTime = manager.manager.now() + AckTimeout;
 
         System.out.print("S");
     }
@@ -212,14 +218,12 @@ public class TCPSock {
         );
 
         this.waitingForAck = true;
-
-        this.outstandingData = new byte[len];
-        System.arraycopy(payload, 0, this.outstandingData, 0, len);
-        this.outstandingSeqNum = this.nextSeqNum;
-        this.outstandingLen = len;
-
-        long now = manager.manager.now();
-        this.timeoutTime = now + AckTimeout;
+        this.transType = Transport.DATA;
+        this.transData = new byte[len];
+        System.arraycopy(payload, 0, this.transData, 0, len);
+        this.transSeqNum = this.nextSeqNum;
+        this.transLen = len;
+        this.timeoutTime = manager.manager.now() + AckTimeout;
 
         System.out.print(".");
     }
@@ -238,6 +242,11 @@ public class TCPSock {
                 Protocol.TRANSPORT_PKT, aPacket.pack());
 
         this.waitingForAck = true;
+        this.transType = Transport.FIN;
+        this.transSeqNum = this.nextSeqNum;
+        this.transLen = 0;
+        this.transData = new byte[0];
+        this.timeoutTime = manager.manager.now() + AckTimeout;
 
         System.out.print("F");
     }
@@ -247,7 +256,7 @@ public class TCPSock {
      */
     public void close() {
         if (isConnected()) {
-            state = State.CLOSED;
+            state = State.SHUTDOWN;
             sendFIN();
         }
     }
@@ -365,10 +374,10 @@ public class TCPSock {
             return;
         }
 
-        if (this.waitingForAck && (t.getSeqNum() == this.outstandingSeqNum + this.outstandingLen)) {
+        if (this.waitingForAck && (t.getSeqNum() == this.transSeqNum + this.transLen)) {
             this.waitingForAck = false;
-            this.outstandingData = null;
-            this.outstandingLen = 0;
+            this.transData = null;
+            this.transLen = 0;
             System.out.print(":");
         } else {
             System.out.print("?");
@@ -377,7 +386,6 @@ public class TCPSock {
 
     public void handleDATA(Packet p) {
         Transport t = Transport.unpack(p.getPayload());
-
         byte[] data = t.getPayload();
 
         if (t.getSeqNum() == this.expectedSeqNum) {
@@ -395,7 +403,7 @@ public class TCPSock {
 
     public void handleFIN(Packet p) {
         this.sendACK();
-        this.state = State.SHUTDOWN;
+        this.state = State.CLOSED;
         manager.connections.remove(id);
     }
 
