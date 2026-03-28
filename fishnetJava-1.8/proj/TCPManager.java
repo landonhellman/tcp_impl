@@ -42,31 +42,20 @@ public class TCPManager {
         this.node.addTimer(AckTimeout, "tcpTimedOut");
     }
 
+    // add timer for closing too!!!!!
+    // add timer for opening!!!
+
     public void check_retransmission() {
         long now = manager.now();
 
         for (TCPSock sock : this.connections.values()) {
+//            if (sock.waitingForAck && now >= sock.timeoutTime) {
+            if (sock.sendBase != sock.nextSeqNum && now >= sock.oldestTimeout) {
+                sock.retransmit_window();
+            }
+
             if (sock.waitingForAck && now >= sock.timeoutTime) {
-
-                Transport pkt = new Transport(
-                        sock.sourcePort,
-                        sock.destinationPort,
-                        sock.transType,
-                        0,
-                        sock.transSeqNum,
-                        sock.transData
-                );
-
-                node.sendSegment(
-                        sock.sourceFishnetAddress,
-                        sock.destinationFishnetAddress,
-                        Protocol.TRANSPORT_PKT,
-                        pkt.pack()
-                );
-
-                System.out.print("!");
-
-                sock.timeoutTime = now + AckTimeout;
+                sock.retransmit_control();
             }
         }
     }
@@ -119,6 +108,24 @@ public class TCPManager {
                 if (listener != null) {
                     listener.handleSYN(p);
                 }
+                else {
+                    Transport t1 = new Transport(
+                            t.getDestPort(),
+                            t.getSrcPort(),
+                            Transport.FIN,
+                            0,
+                            0,
+                            new byte[0]
+                    );
+
+                    node.sendSegment(
+                            p.getDest(),
+                            p.getSrc(),
+                            Protocol.TRANSPORT_PKT,
+                            t1.pack()
+                    );
+                    System.out.print("F");
+                }
                 break;
             case Transport.ACK:
                 if (sock == null) {
@@ -140,6 +147,8 @@ public class TCPManager {
                 }
                 sock.handleFIN(p);
                 break;
+
+            // give an error
         }
     }
 
