@@ -17,13 +17,11 @@ public class TCPManager {
     private int addr;
     public Manager manager;
 
-    private static final byte dummy[] = new byte[0];
-
     HashMap<Integer, TCPSock> boundPorts = new HashMap<>();
     HashMap<Integer, TCPSock> listeners = new HashMap<>();
     HashMap<TCPSockID, TCPSock> connections = new HashMap<>();
 
-    private final long AckTimeout = 500;
+    private final long timeout = 500;
 
     public TCPManager(Node node, int addr, Manager manager) {
         this.node = node;
@@ -39,9 +37,10 @@ public class TCPManager {
     }
 
     public void start_timer() {
-        this.node.addTimer(AckTimeout, "tcpTimedOut");
+        this.node.addTimer(timeout, "tcpTimedOut");
     }
 
+    // notes from meeting w/ professor
     // add timer for closing too!!!!!
     // add timer for opening!!!
 
@@ -49,11 +48,12 @@ public class TCPManager {
         long now = manager.now();
 
         for (TCPSock sock : this.connections.values()) {
-//            if (sock.waitingForAck && now >= sock.timeoutTime) {
+            // Timer Used for ACK
             if (sock.sendBase != sock.nextSeqNum && now >= sock.oldestTimeout) {
                 sock.retransmit_window();
             }
 
+            // Timer used for Opening and Closing
             if (sock.waitingForAck && now >= sock.timeoutTime) {
                 sock.retransmit_control();
             }
@@ -74,6 +74,7 @@ public class TCPManager {
         return new TCPSock(this);
     }
 
+    // Binds a port to a given sock.
     public boolean bindPort(int sourcePort, TCPSock sock) {
         if (boundPorts.containsKey(sourcePort)) {
             return false;
@@ -82,10 +83,12 @@ public class TCPManager {
         return true;
     }
 
+    // Designates Sock as Listener
     public void createListener(int sourcePort, TCPSock sock) {
         listeners.put(sourcePort, sock);
     }
 
+    // Manages different packet and transport types. Specifically, SYN, ACK, DATA, and FIN.
     public void receiveTransport(Packet p) {
         Transport t = Transport.unpack(p.getPayload());
 
@@ -129,14 +132,14 @@ public class TCPManager {
                 break;
             case Transport.ACK:
                 if (sock == null) {
-                    System.out.print("?");
+//                    System.out.print("?");
                     return;
                 }
                 sock.handleACK(p);
                 break;
             case Transport.DATA:
                 if (sock == null) {
-                    System.out.print("!");
+//                    System.out.print("!");
                     return;
                 }
                 sock.handleDATA(p);

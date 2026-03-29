@@ -14,6 +14,7 @@ import java.util.Queue;
 import java.util.LinkedList;
 
 public class TCPSock {
+
     // TCP socket states
     enum State {
         // protocol states
@@ -23,47 +24,61 @@ public class TCPSock {
         ESTABLISHED,
         SHUTDOWN // close requested, FIN not sent (due to unsent data in queue)
     }
-
-    // use EstRTT + 4 * DevRTT
-    private final long AckTimeout = 500;
     private State state;
 
-    // basically what was stated in the spec
+
+    // use EstRTT + 4 * DevRTT from the slides
+    private static final long INITIAL_TIMEOUT = 5000;
+    private static final long MIN_TIMEOUT = 100;
+    private static final long MAX_TIMEOUT = 50000;
+    public long controlSendTime;
+    public boolean controlRetransmitted = false;
+
+    private double estRTT = -1;
+    private double devRTT = -1;
+    private long TIMEOUT = INITIAL_TIMEOUT;
+
+
+    // Congestion Control
+    private int cwnd = Transport.MAX_PAYLOAD_SIZE;
+
+
+    // Used for TCPSockID. Basically stated in the spec.
     public int sourceFishnetAddress;
     public int destinationFishnetAddress;
     public int sourcePort;
     public int destinationPort;
 
-    //
     public TCPSockID id;
     private TCPManager manager;
 
 
-    // for retransmission COMMENT OUT EVERNTUALLY
+    // For Retransmission
     public boolean waitingForAck = false;
-//    int transType;
-//    byte[] transData;
-//    int transSeqNum;
-//    int transLen;
     public long timeoutTime;
 
-    // QUESTION: can we just use the Java.util queue?
+
+    // Queue for pending connections
     Queue<TCPSock> pendingConnections = new LinkedList<>();
 
-    // backlog
+
+    // Backlog
     private int backlog;
     public int expectedSeqNum;
 
-    // buffer for reading and writing
-    // ring buffer
+
+    // Ring Buffer used for reading and writing
+    // Recommended by Professor. Thank you!
     private static final int WINDOW_SLOTS = 4;
     public static final int windowSize = WINDOW_SLOTS * Transport.MAX_PAYLOAD_SIZE;
+    public int remoteAdvertisedWindow = windowSize;
 
     private static class ringBuffer {
         boolean use;
         int seqNum;
         int len;
         byte[] data;
+        long sendTime;
         long timeoutTime;
     }
 
@@ -76,12 +91,18 @@ public class TCPSock {
     public int nextSeqNum = 1;
     public long oldestTimeout;
 
-    private LinkedList<Byte> recvBuffer = new LinkedList<>();
 
+    // Receiver Buffer so not completely overwhelmed
+    private LinkedList<Byte> recvBuffer = new LinkedList<>();
+    public int RECEIVER_BUFFER_SIZE = 8 * Transport.MAX_PAYLOAD_SIZE;
+
+
+    // Constructor
     public TCPSock(TCPManager manager) {
         this.manager = manager;
         this.state = State.CLOSED;
 
+        // Initialize the Ring Buffer
         for (int i = 0; i < WINDOW_SLOTS; i++) {
             buffer[i] = new ringBuffer();
         }
@@ -132,10 +153,12 @@ public class TCPSock {
     }
 
     // queue a socket connection
-    public void queueSock(TCPSock sock) {
-        if (pendingConnections.size() < backlog) {
-            pendingConnections.add(sock);
+    public boolean queueSock(TCPSock sock) {
+        if (pendingConnections.size() >= backlog) {
+            return false;
         }
+        pendingConnections.add(sock);
+        return true;
     }
 
     /**
@@ -188,6 +211,9 @@ public class TCPSock {
         this.id = new TCPSockID(sourceFishnetAddress, destAddr, sourcePort, destPort);
         this.state = State.SYN_SENT;
 
+        this.sendBase = 2;
+        this.nextSeqNum = 2;
+
         manager.connections.put(this.id, this);
         sendSYN();
 
@@ -200,7 +226,7 @@ public class TCPSock {
                 this.destinationPort,
                 Transport.SYN,
                 0,
-                0, // I just decided to do 0 because that's a valid option. Technically not super safe though.
+                1, // I just decided to do 1 because that's a valid option. Technically not super safe though.
                 new byte[0]
         );
 
@@ -208,21 +234,22 @@ public class TCPSock {
                 Protocol.TRANSPORT_PKT, aPacket.pack());
 
         this.waitingForAck = true;
-//        this.transType = Transport.SYN;
-//        this.transSeqNum = 0;
-//        this.transLen = 0;
-//        this.transData = new byte[0];
-        this.timeoutTime = manager.manager.now() + AckTimeout;
+        this.controlRetransmitted = false;
+        this.controlSendTime = manager.manager.now();
+        this.timeoutTime = this.controlSendTime + this.TIMEOUT;
 
         System.out.print("S");
     }
 
     public void sendACK() {
+
+        int advertisedWindow = RECEIVER_BUFFER_SIZE - recvBuffer.size();
+
         Transport aPacket = new Transport(
                 this.sourcePort,
                 this.destinationPort,
                 Transport.ACK,
-                windowSize,
+                advertisedWindow,
                 this.expectedSeqNum,
                 new byte[0]
         );
@@ -231,16 +258,15 @@ public class TCPSock {
                 Protocol.TRANSPORT_PKT, aPacket.pack());
     }
 
-//    public void sendDATA(byte[] data, int pos, int len) {
     public void sendDATA(byte[] data, int seqNum) {
-//        byte[] payload = new byte[len];
-//        System.arraycopy(data, pos, payload, 0, len);
+
+        int advertisedWindow = RECEIVER_BUFFER_SIZE - recvBuffer.size();
 
         Transport pkt = new Transport(
                 this.sourcePort,
                 this.destinationPort,
                 Transport.DATA,
-                windowSize,
+                advertisedWindow,
                 seqNum,
                 data
         );
@@ -248,14 +274,6 @@ public class TCPSock {
         manager.node.sendSegment(this.sourceFishnetAddress, this.destinationFishnetAddress,
                 Protocol.TRANSPORT_PKT, pkt.pack()
         );
-
-//        this.waitingForAck = true;
-//        this.transType = Transport.DATA;
-//        this.transData = new byte[len];
-//        System.arraycopy(payload, 0, this.transData, 0, len);
-//        this.transSeqNum = this.nextSeqNum;
-//        this.transLen = len;
-//        this.timeoutTime = manager.manager.now() + AckTimeout;
 
         System.out.print(".");
     }
@@ -274,11 +292,9 @@ public class TCPSock {
                 Protocol.TRANSPORT_PKT, aPacket.pack());
 
         this.waitingForAck = true;
-//        this.transType = Transport.FIN;
-//        this.transSeqNum = this.nextSeqNum;
-//        this.transLen = 0;
-//        this.transData = new byte[0];
-        this.timeoutTime = manager.manager.now() + AckTimeout;
+        this.controlRetransmitted = false;
+        this.controlSendTime = manager.manager.now();
+        this.timeoutTime = this.controlSendTime + this.TIMEOUT;
 
         System.out.print("F");
     }
@@ -302,10 +318,26 @@ public class TCPSock {
      */
     // flash everything
     public void release() {
-//        this.waitingForAck = false;
-//        this.transData = null;
-//        this.transLen = 0;
+        this.waitingForAck = false;
+        this.controlRetransmitted = false;
+        this.timeoutTime = 0;
+        this.oldestTimeout = 0;
+
+        this.ringHead = 0;
+        this.ringTail = 0;
+        this.ringCount = 0;
+
+        for (int i = 0; i < buffer.length; i++) {
+            buffer[i].use = false;
+            buffer[i].data = null;
+            buffer[i].len = 0;
+            buffer[i].seqNum = 0;
+            buffer[i].sendTime = 0;
+            buffer[i].timeoutTime = 0;
+        }
+
         this.state = State.CLOSED;
+
         if (this.id != null) {
             manager.connections.remove(this.id);
         }
@@ -331,33 +363,37 @@ public class TCPSock {
         }
 
         int writtenBit = 0;
+        int usableWindow = Math.min(remoteAdvertisedWindow, cwnd);
 
-        while (writtenBit < len && (nextSeqNum < windowSize + sendBase) &&
+        while (writtenBit < len && (nextSeqNum < usableWindow + sendBase) &&
                 ringCount < WINDOW_SLOTS) {
 
-            // making a packet
-            int available = windowSize + sendBase - nextSeqNum;
+            // Make a good packet size
+            int available = usableWindow + sendBase - nextSeqNum;
             int chunk = Math.min(Transport.MAX_PAYLOAD_SIZE, len - writtenBit);
             chunk = Math.min(chunk, available);
 
             byte[] payload = new byte[chunk];
             System.arraycopy(buf, pos + writtenBit, payload, 0, chunk);
 
-            //sending packet (udt_send)
+            // Send packet ( aka udt_send )
             sendDATA(payload, nextSeqNum);
+
+            long now = manager.manager.now();
 
             ringBuffer s = buffer[ringTail];
             s.use = true;
             s.seqNum = nextSeqNum;
             s.len = chunk;
             s.data = payload;
-            s.timeoutTime = manager.manager.now();
+            s.sendTime = now;
+            s.timeoutTime = now + this.TIMEOUT;
 
             ringTail = (ringTail + 1) % buffer.length;
             ringCount++;
 
             if (sendBase == nextSeqNum) {
-                oldestTimeout = manager.manager.now() + AckTimeout;
+                oldestTimeout = s.timeoutTime;
             }
 
             nextSeqNum += chunk;
@@ -391,7 +427,7 @@ public class TCPSock {
 
         int count = 0;
 
-        // read from the buffer array!
+        // Read from the receiver buffer array!
         while (count < len && !recvBuffer.isEmpty()) {
             buf[pos + count] = recvBuffer.removeFirst();
             count++;
@@ -400,9 +436,9 @@ public class TCPSock {
         return count;
     }
 
-    // important handlers.
+    // Important handlers.
     public void handleSYN(Packet p) {
-        //get listener
+        // Get listener
         Transport t = Transport.unpack(p.getPayload());
         TCPSock listener = manager.listeners.get(t.getDestPort());
 
@@ -412,7 +448,7 @@ public class TCPSock {
 
         // maybe the listener should turn into a regular sock? I didn't really understand how to do this part.
 
-        // create a new socket to send an ack back
+        // Create a new socket to send an ack back
         TCPSock sock = manager.socket();
         sock.sourcePort = t.getDestPort();
         sock.destinationPort = t.getSrcPort();
@@ -426,13 +462,33 @@ public class TCPSock {
                 sock.destinationPort
         );
 
-        // in this case, it will always be 1
+        // In this case, it will always be 2
         sock.expectedSeqNum = t.getSeqNum() + 1;
 
-        // we queue the socket because we await the ack
-        listener.queueSock(sock);
+        sock.sendBase = 2;
+        sock.nextSeqNum = 2;
 
-        // this might need to be put later?
+        if (!listener.queueSock(sock)) {
+            Transport pk = new Transport(
+                    sock.sourcePort,
+                    sock.destinationPort,
+                    Transport.FIN,
+                    0,
+                    0,
+                    new byte[0]
+            );
+
+            manager.node.sendSegment(
+                    sock.sourceFishnetAddress,
+                    sock.destinationFishnetAddress,
+                    Protocol.TRANSPORT_PKT,
+                    pk.pack()
+            );
+            System.out.print("F");
+            return;
+        }
+
+        // This might need to be put later?
         manager.connections.put(sock.id, sock);
         sock.setEstablished();
 
@@ -441,8 +497,21 @@ public class TCPSock {
 
     public void handleACK(Packet p) {
         Transport t = Transport.unpack(p.getPayload());
+        remoteAdvertisedWindow = t.getWindow();
+
+        long now = manager.manager.now();
 
         if (this.isConnectionPending()) {
+            if (t.getSeqNum() != this.sendBase) {
+                System.out.print("?");
+                return;
+            }
+
+            if (!controlRetransmitted) {
+                long sampleRTT = now - controlSendTime;
+                updateRTT(sampleRTT);
+            }
+
             this.setEstablished();
             this.waitingForAck = false;
             System.out.print(":");
@@ -450,6 +519,8 @@ public class TCPSock {
         }
 
         if (t.getSeqNum() > sendBase) {
+
+            cwnd += Transport.MAX_PAYLOAD_SIZE;
 
             sendBase = t.getSeqNum();
 
@@ -462,12 +533,14 @@ public class TCPSock {
                     s.data = null;
                     ringHead = (ringHead + 1) % buffer.length;
                     ringCount--;
+                    long sampleRTT = now - s.sendTime;
+                    updateRTT(sampleRTT);
                 } else {
                     break;
                 }
             }
 
-            oldestTimeout = (ringCount > 0) ? manager.manager.now() + AckTimeout : -1;
+            oldestTimeout = (ringCount > 0) ? buffer[ringHead].timeoutTime : -1;
             System.out.print(":");
         } else {
             System.out.print("?");
@@ -475,25 +548,32 @@ public class TCPSock {
 
         if (this.isClosurePending() && sendBase == nextSeqNum) {
             this.waitingForAck = false;
+            this.controlRetransmitted = false;
             this.release();
-            sendFIN();
+//            sendFIN();
         }
 
     }
 
-    // this makes it nonblocking
     public void handleDATA(Packet p) {
         Transport t = Transport.unpack(p.getPayload());
         if (t == null) return;
 
         byte[] data = t.getPayload();
 
+        int space = RECEIVER_BUFFER_SIZE - recvBuffer.size();
+
         if (t.getSeqNum() == this.expectedSeqNum) {
-            for (byte b : data) {
-                this.recvBuffer.addLast(b);
+            if (data.length <= space) {
+                for (byte b : data) {
+                    this.recvBuffer.addLast(b);
+                }
+                this.expectedSeqNum += data.length;
+                System.out.print(".");
             }
-            this.expectedSeqNum += data.length;
-            System.out.print(".");
+            else {
+                System.out.print("!");
+            }
         } else {
             System.out.print("!");
         }
@@ -508,6 +588,11 @@ public class TCPSock {
     }
 
     public void retransmit_window() {
+        long now = manager.manager.now();
+
+        // Congestion Control
+        cwnd /= 2;
+
         for (int i = 0; i < ringCount; i++) {
             int idx = (ringHead + i) % buffer.length;
             ringBuffer s = buffer[idx];
@@ -528,21 +613,25 @@ public class TCPSock {
                     pkt.pack()
             );
 
+            s.timeoutTime = now + this.TIMEOUT;
+
             System.out.print("!");
         }
-        oldestTimeout = manager.manager.now() + AckTimeout;
+        oldestTimeout = (ringCount > 0) ? buffer[ringHead].timeoutTime : -1;
     }
 
     public void retransmit_control() {
 
         int transportType = (this.state == State.SYN_SENT) ? Transport.SYN : (isClosurePending()) ? Transport.FIN : -1;
 
+        int seqNumber = (this.state == State.SYN_SENT) ? 1 : this.nextSeqNum;
+
         Transport pkt = new Transport(
                 sourcePort,
                 destinationPort,
                 transportType,
                 0,
-                0,
+                seqNumber,
                 new byte[0]
         );
 
@@ -555,7 +644,41 @@ public class TCPSock {
 
         System.out.print("!");
 
-        timeoutTime = manager.manager.now() + AckTimeout;
+        controlRetransmitted = true;
+        timeoutTime = manager.manager.now() + this.TIMEOUT;
+    }
+
+    /*
+     * RTT LOGIC
+     */
+    
+    // to make the timeout not too big or small where it's impossible to run anymore
+    private long limitTIMEOUT(long value) {
+        if (value < MIN_TIMEOUT) return MIN_TIMEOUT;
+        if (value > MAX_TIMEOUT) return MAX_TIMEOUT;
+        return value;
+    }
+
+    // from slides
+    private void updateRTT(long sampleRTT) {
+        if (sampleRTT <= 0) {
+            return;
+        }
+
+        double beta = 0.25;
+        double alpha = 0.125;
+
+        if (estRTT < 0) {
+            // first sample
+            estRTT = sampleRTT;
+            devRTT = sampleRTT / 2.0;
+        } else {
+            // From the slides
+            estRTT = (1-alpha) * estRTT + alpha * sampleRTT;
+            devRTT = (1-beta) * devRTT + beta * Math.abs(sampleRTT - estRTT);
+        }
+
+        TIMEOUT = limitTIMEOUT((long) Math.ceil(estRTT + 4.0 * devRTT));
     }
 
     /*

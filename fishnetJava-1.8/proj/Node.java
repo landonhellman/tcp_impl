@@ -158,6 +158,7 @@ public class Node {
 	    this.receivePingReply(packet);
 	    break;
 
+    // New Protocol Case. Used for Socket API + TCP Implementation
     case Protocol.TRANSPORT_PKT:
         this.tcpMan.receiveTransport(packet);
         break;
