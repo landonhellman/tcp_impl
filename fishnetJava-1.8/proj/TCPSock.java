@@ -243,7 +243,7 @@ public class TCPSock {
 
     public void sendACK() {
 
-        System.out.println("TIMEOUT IS NOW: " +  timeoutTime);
+//        System.out.println("TIMEOUT IS NOW: " +  timeoutTime);
 
         int requestedWindow = RECEIVER_BUFFER_SIZE - recvBuffer.size();
 
@@ -680,7 +680,7 @@ public class TCPSock {
             devRTT = (1-beta) * devRTT + beta * Math.abs(sampleRTT - estRTT);
         }
 
-        System.out.println("TIMEOUT IS NOW: " + TIMEOUT);
+//        System.out.println("TIMEOUT IS NOW: " + TIMEOUT);
 
         TIMEOUT = limitTIMEOUT((long) Math.ceil(estRTT + 4.0 * devRTT));
     }
