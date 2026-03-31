@@ -7,7 +7,7 @@
  *
  * <p>Company: Yale University</p>
  *
- * @author Hao Wang
+ * @author Hao Wang / Landon Hellman
  * @version 1.0
  */
 import java.util.Queue;
@@ -30,7 +30,7 @@ public class TCPSock {
     // use EstRTT + 4 * DevRTT from the slides
     private static final long INITIAL_TIMEOUT = 5000;
     private static final long MIN_TIMEOUT = 100;
-    private static final long MAX_TIMEOUT = 50000;
+    private static final long MAX_TIMEOUT = 500000;
     public long controlSendTime;
     public boolean controlRetransmitted = false;
 
@@ -71,7 +71,7 @@ public class TCPSock {
     // Recommended by Professor. Thank you!
     private static final int WINDOW_SLOTS = 4;
     public static final int windowSize = WINDOW_SLOTS * Transport.MAX_PAYLOAD_SIZE;
-    public int remoteAdvertisedWindow = windowSize;
+    public int remoteRequestedWindow = windowSize;
 
     private static class ringBuffer {
         boolean use;
@@ -243,13 +243,15 @@ public class TCPSock {
 
     public void sendACK() {
 
-        int advertisedWindow = RECEIVER_BUFFER_SIZE - recvBuffer.size();
+        System.out.println("TIMEOUT IS NOW: " +  timeoutTime);
+
+        int requestedWindow = RECEIVER_BUFFER_SIZE - recvBuffer.size();
 
         Transport aPacket = new Transport(
                 this.sourcePort,
                 this.destinationPort,
                 Transport.ACK,
-                advertisedWindow,
+                requestedWindow,
                 this.expectedSeqNum,
                 new byte[0]
         );
@@ -260,13 +262,13 @@ public class TCPSock {
 
     public void sendDATA(byte[] data, int seqNum) {
 
-        int advertisedWindow = RECEIVER_BUFFER_SIZE - recvBuffer.size();
+        int requestedWindow = RECEIVER_BUFFER_SIZE - recvBuffer.size();
 
         Transport pkt = new Transport(
                 this.sourcePort,
                 this.destinationPort,
                 Transport.DATA,
-                advertisedWindow,
+                requestedWindow,
                 seqNum,
                 data
         );
@@ -363,7 +365,7 @@ public class TCPSock {
         }
 
         int writtenBit = 0;
-        int usableWindow = Math.min(remoteAdvertisedWindow, cwnd);
+        int usableWindow = Math.min(remoteRequestedWindow, cwnd);
 
         while (writtenBit < len && (nextSeqNum < usableWindow + sendBase) &&
                 ringCount < WINDOW_SLOTS) {
@@ -417,7 +419,7 @@ public class TCPSock {
      *             than len; on failure, -1
      */
     public int read(byte[] buf, int pos, int len) {
-        if (!isConnected() && !isClosurePending() && !isClosed()) {
+        if (this.state != State.ESTABLISHED) {
             return -1;
         }
 
@@ -497,7 +499,7 @@ public class TCPSock {
 
     public void handleACK(Packet p) {
         Transport t = Transport.unpack(p.getPayload());
-        remoteAdvertisedWindow = t.getWindow();
+        this.remoteRequestedWindow = t.getWindow();
 
         long now = manager.manager.now();
 
@@ -520,7 +522,7 @@ public class TCPSock {
 
         if (t.getSeqNum() > sendBase) {
 
-            cwnd += Transport.MAX_PAYLOAD_SIZE;
+            this.cwnd += Transport.MAX_PAYLOAD_SIZE;
 
             sendBase = t.getSeqNum();
 
@@ -591,7 +593,7 @@ public class TCPSock {
         long now = manager.manager.now();
 
         // Congestion Control
-        cwnd /= 2;
+        this.cwnd /= 2;
 
         for (int i = 0; i < ringCount; i++) {
             int idx = (ringHead + i) % buffer.length;
@@ -651,7 +653,7 @@ public class TCPSock {
     /*
      * RTT LOGIC
      */
-    
+
     // to make the timeout not too big or small where it's impossible to run anymore
     private long limitTIMEOUT(long value) {
         if (value < MIN_TIMEOUT) return MIN_TIMEOUT;
@@ -677,6 +679,8 @@ public class TCPSock {
             estRTT = (1-alpha) * estRTT + alpha * sampleRTT;
             devRTT = (1-beta) * devRTT + beta * Math.abs(sampleRTT - estRTT);
         }
+
+        System.out.println("TIMEOUT IS NOW: " + TIMEOUT);
 
         TIMEOUT = limitTIMEOUT((long) Math.ceil(estRTT + 4.0 * devRTT));
     }

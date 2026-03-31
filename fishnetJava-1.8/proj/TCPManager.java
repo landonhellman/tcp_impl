@@ -9,7 +9,7 @@ import java.util.HashMap;
  *
  * <p>Company: Yale University</p>
  *
- * @author Hao Wang
+ * @author Hao Wang / Landon Hellman
  * @version 1.0
  */
 public class TCPManager {
